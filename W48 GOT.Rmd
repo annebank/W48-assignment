@@ -1,0 +1,287 @@
+---
+title: "W48 GOT"
+author: "Anne Hornung"
+date: "5/12/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Attaching packages
+```{r library}
+
+library(tidyverse)
+library(here)
+
+# for text mining
+library(pdftools)
+library(tidytext)
+library(textdata) 
+library(ggwordcloud)
+
+get_sentiments(lexicon = "nrc")
+
+get_sentiments(lexicon = "afinn")
+
+```
+
+
+### Get the GOT text
+```{r get-got-document, echo=TRUE}
+
+got_path <- here("data","got.pdf")
+got_text <- pdf_text(got_path)
+
+```
+
+Attempt to extract single page
+```{r single-page}
+
+got_p37 <- got_text[37]
+got_p37
+
+```
+
+
+### Wrangling
+```{r split-lines}
+
+got_df <- data.frame(got_text) %>% 
+  mutate(text_full = str_split(got_text, pattern = '\\n')) %>% 
+  unnest(text_full) %>% 
+  mutate(text_full = str_trim(text_full))
+
+```
+
+### Get the tokens (individual words) in tidy format
+```{r tokenize}
+
+got_tokens <- got_df %>% 
+  unnest_tokens(word, text_full)
+
+```
+
+Count the words
+```{r count-words}
+
+got_wc <- got_tokens %>% 
+  count(word) %>% 
+  arrange(-n)
+got_wc
+
+```
+
+### Removing stop words
+```{r remove-stopwords}
+
+got_stop <- got_tokens %>% 
+  anti_join(stop_words) %>% 
+  select(-got_text)
+
+```
+Check wordcount again
+```{r wordcount2}
+
+got_swc <- got_stop %>% 
+  count(word) %>% 
+  arrange(-n)
+
+```
+
+Getting rid of numbers in `got_stop`
+```{r skip-numbers}
+
+got_no_numeric <- got_stop %>% 
+  filter(is.na(as.numeric(word)))
+
+```
+
+### Word cloud of non-numeric GOT book words
+
+```{r word-cloud-prep}
+# there are more than 11000 unique words
+length(unique(got_no_numeric$word))
+
+# filtering to only get the top 100 most frequent words
+got_top100 <- got_no_numeric %>% 
+  count(word) %>% 
+  arrange(-n) %>% 
+  head(100)
+
+```
+
+### Make a word cloud of top 100 words
+```{r wordcloud}
+
+got_cloud <- ggplot(data = got_top100, aes(label = word)) +
+  geom_text_wordcloud() +
+  theme_minimal()
+
+got_cloud
+
+```
+
+Customization of word cloud
+```{r wordcloud-custom}
+
+ggplot(data = got_top100, aes(label = word, size = n)) +
+  geom_text_wordcloud_area(aes(color = n), shape = "diamond") +
+  scale_size_area(max_size = 12) +
+  scale_color_gradientn(colors = c("darkgreen","blue","red")) +
+  theme_minimal()
+
+```
+
+### Sentiment analysis
+
+"afinn": Words ranked from -5 (very negative) to +5 (very positive)
+```{r afinn}
+
+get_sentiments(lexicon = "afinn")
+
+# looking at fairly positive words
+afinn_pos <- get_sentiments("afinn") %>% 
+  filter(value %in% c(3,4,5))
+
+afinn_pos
+
+```
+
+
+bing: binary, "positive" or "negative"
+```{r bing}
+
+get_sentiments(lexicon = "bing")
+
+```
+
+nrc:
+```{r nrc}
+get_sentiments(lexicon = "nrc")
+
+```
+
+### Sentiment analysis with afinn
+
+```{r bind-afinn}
+got_afinn <- got_stop %>% 
+  inner_join(get_sentiments("afinn"))
+
+```
+
+Find some counts (by sentiment ranking):
+```{r count-afinn}
+
+got_afinn_hist <- got_afinn %>% 
+  count(value)
+
+# Plot them
+ggplot(data = got_afinn_hist, aes(x = value, y = n)) +
+  geom_col()
+
+```
+
+Investiage a few of the words in depth
+```{r afinn2}
+# What are these '2' words?
+got_afinn2 <- got_afinn %>% 
+  filter(value == 2)
+
+```
+
+```{r afinn2-or-more}
+
+# Check the unique 2-score words:
+unique(got_afinn2$word)
+
+# Count & plot them
+got_afinn2_n <- got_afinn2 %>% 
+  count(word, sort = TRUE) %>% 
+  mutate(word = fct_reorder(factor(word), n))
+
+
+ggplot(data = got_afinn2_n, aes(x = word, y = n)) +
+  geom_col() +
+  coord_flip()
+
+```
+
+Summarize sentiment for the book
+```{r summarize-afinn}
+got_summary <- got_afinn %>% 
+  summarize(
+    mean_score = mean(value),
+    median_score = median(value)
+)
+```
+The median and the mean indicate slightly negative overall sentiments based on the AFINN lexicon
+
+### NRC lexicon for sentiment analysis
+
+```{r bind-bing}
+
+got_nrc <- got_stop %>% 
+  inner_join(get_sentiments("nrc"))
+
+```
+
+```{r check-exclusions}
+got_exclude <- got_stop %>% 
+  anti_join(get_sentiments("nrc"))
+
+# View(got_exclude)
+
+# Count to find the most excluded:
+got_exclude_n <- got_exclude %>% 
+  count(word, sort = TRUE)
+
+head(got_exclude_n)
+
+```
+
+Find some counts:
+```{r count-bing}
+got_nrc_n <- got_nrc %>% 
+  count(sentiment, sort = TRUE)
+
+# And plot them:
+
+ggplot(data = got_nrc_n, aes(x = sentiment, y = n)) +
+  geom_col()
+
+```
+
+Or count by sentiment *and* word, then facet:
+```{r count-nrc}
+got_nrc_n5 <- got_nrc %>% 
+  count(word,sentiment, sort = TRUE) %>% 
+  group_by(sentiment) %>% 
+  top_n(5) %>% 
+  ungroup()
+
+got_nrc_gg <- ggplot(data = got_nrc_n5, aes(x = reorder(word,n), y = n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, ncol = 2, scales = "free") +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Word", y = "count")
+
+# Show it
+got_nrc_gg
+
+# Save it
+ggsave(plot = got_nrc_gg, 
+       here("figures","got_nrc_sentiment.png"), 
+       height = 8, 
+       width = 5)
+
+```
+
+## Take away
+
+Taking this script as a point of departure, apply sentiment analysis on the Game of Thrones. You will find a pdf in the data folder. 
+What are the most common meaningful words and what emotions do you expect will dominate this volume? Answer: Lord, death, ser. I expected negative emotions to dominate this volume.
+Are there any terms that are similarly ambiguous to the 'confidence' above? Answer: Both "Lord" appears in both disgust, negative, positive and trust. And "found" appears as the most common in joy, which is weird. 
